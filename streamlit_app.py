@@ -7,8 +7,20 @@ from datetime import datetime, date
 from app_core import (
     USERS, verify_password, make_user,
     lista_estudios, list_folios, get_order_summary,
-    save_order, save_results, read_csv, decrypt_view, filter_df, export_excel
+    save_order, save_results, read_csv, decrypt_view, filter_df, export_excel,
+    load_users_from_file, save_users_to_file, verify_user_login
 )
+
+# -------------------------
+# Inicializar usuarios (JSON)
+# -------------------------
+users = load_users_from_file()
+
+# Si el archivo está vacío, creamos un admin por defecto
+if not users:
+    users["admin@lab.local"] = make_user("admin123", "admin")
+    save_users_to_file(users)
+
 
 # Detectar logo en la raíz y usarlo como page_icon si existe
 logo_path = None
@@ -26,16 +38,24 @@ if "user" not in st.session_state:
 def login_view():
     # Mostrar sólo el encabezado con el logo; no duplicar aquí.
     st.subheader("Iniciar sesión")
-    email = st.text_input("Correo", value="recep@lab.local")
-    pwd   = st.text_input("Contraseña", type="password", value="recep123")
+
+    username = st.text_input("Usuario / correo")
+    password = st.text_input("Contraseña", type="password")
+
     if st.button("Entrar", type="primary"):
-        rec = USERS.get(email)
-        if rec and verify_password(pwd, rec["salt"], rec["hash"]):
-            st.session_state.user = {"email": email, "role": rec["role"]}
-            st.success(f"Bienvenida/o: {email} — rol: {rec['role']}")
+        users = load_users_from_file()
+        if verify_user_login(username, password, users):
+            st.session_state.user = {
+                "email": username,
+                "role": users[username].get("role", "sin_rol"),
+            }
+            st.success(
+                f"Bienvenida/o: {username} — rol: {st.session_state.user['role']}"
+            )
             st.rerun()
         else:
             st.error("Usuario o contraseña incorrectos")
+
 
 def logout_button():
     st.sidebar.button("Cerrar sesión", on_click=lambda: st.session_state.update(user=None))
@@ -220,43 +240,73 @@ with tabs[3]:
     if st.session_state.user["role"] != "admin":
         st.info("Solo admin puede gestionar usuarios.")
     else:
-        st.subheader("👤 Gestión de usuarios (demo en memoria)")
+        st.subheader("👤 Gestión de usuarios")
+
+        # Cargar usuarios actuales desde el archivo JSON
+        users = load_users_from_file()
+
+        # ---- Crear / actualizar usuario ----
         with st.form("form_new_user"):
             col1, col2, col3 = st.columns(3)
             with col1:
                 name = st.text_input("Nombre (solo referencia local)")
             with col2:
-                email = st.text_input("Correo")
+                email = st.text_input("Usuario / correo")
             with col3:
-                role = st.selectbox("Rol", ["recepcion","lab","medico","admin"])
+                role = st.selectbox("Rol", ["recepcion", "lab", "admin"])
             pwd = st.text_input("Contraseña", type="password")
             submitted_u = st.form_submit_button("Crear/Actualizar usuario")
-        if submitted_u:
-            if email and pwd and role:
-                USERS[email] = make_user(pwd, role)
-                st.success(f"Usuario {email} creado/actualizado")
-            else:
-                st.error("Completa correo, rol y contraseña")
 
-        # Tabla simple: mostrar email y permitir establecer/crear contraseña
-        st.markdown("**Usuarios actuales (solo memoria de ejecución):**")
-        users = sorted(USERS.keys())
+        if submitted_u:
+            if not email or not pwd or not role:
+                st.error("Completa usuario/correo, rol y contraseña.")
+            else:
+                # Creamos el registro de usuario con contraseña hasheada
+                record = make_user(pwd, role)
+                if name:
+                    record["name"] = name  # opcional: guardamos el nombre descriptivo
+                users[email] = record
+                save_users_to_file(users)
+                st.success(f"Usuario {email} creado/actualizado.")
+                st.rerun()
+
+
+               # Tabla: mostrar usuarios y permitir cambiar contraseñas
+        st.markdown("**Usuarios actuales:**")
+
+            # Tabla: mostrar usuarios y permitir cambiar contraseñas
+        st.markdown("**Usuarios actuales:**")
+
         if users:
-            for u in users:
-                safe = u.replace("@","_at_").replace(".","_")
-                cols = st.columns([3,2,6])
+            for u, rec in users.items():
+                safe = u.replace("@", "_at_").replace(".", "_")
+                cols = st.columns([3, 2, 4, 1])
+
+                # Usuario
                 cols[0].markdown(f"**{u}**")
-                # Mostrar rol en pequeño para referencia
-                cols[1].markdown(f"{USERS[u]['role']}")
+
+                # Rol
+                cols[1].markdown(rec.get("role", ""))
+
+                # Controles de contraseña
                 with cols[2]:
-                    pwd_in = st.text_input("Nueva contraseña", type="password", key=f"pwd_in_{safe}")
-                    pwd_conf = st.text_input("Confirmar contraseña", type="password", key=f"pwd_conf_{safe}")
+                    pwd_in = st.text_input(
+                        "Nueva contraseña",
+                        type="password",
+                        key=f"pwd_in_{safe}",
+                    )
+                    pwd_conf = st.text_input(
+                        "Confirmar contraseña",
+                        type="password",
+                        key=f"pwd_conf_{safe}",
+                    )
                     set_key = f"set_{safe}"
                     gen_key = f"gen_{safe}"
-                    c1, c2 = st.columns([1,1])
+                    c1, c2 = st.columns([1, 1])
+
+                    # Establecer contraseña manual
                     with c1:
                         if st.button("Establecer contraseña", key=set_key):
-                            # Validaciones
                             if not pwd_in:
                                 st.error("Introduce la nueva contraseña.")
                             elif len(pwd_in) < 6:
@@ -264,15 +314,55 @@ with tabs[3]:
                             elif pwd_in != pwd_conf:
                                 st.error("Las contraseñas no coinciden.")
                             else:
-                                USERS[u] = make_user(pwd_in, USERS[u]["role"])
+                                new_rec = make_user(pwd_in, rec.get("role", ""))
+                                if "name" in rec:
+                                    new_rec["name"] = rec["name"]
+                                users[u] = new_rec
+                                save_users_to_file(users)
                                 st.success(f"Contraseña actualizada para {u}")
                                 st.code(pwd_in)
+                                st.rerun()
+
+                    # Generar contraseña temporal
                     with c2:
                         if st.button("Generar contraseña temporal", key=gen_key):
                             temp_pwd = secrets.token_urlsafe(6)
-                            USERS[u] = make_user(temp_pwd, USERS[u]["role"])
+                            new_rec = make_user(temp_pwd, rec.get("role", ""))
+                            if "name" in rec:
+                                new_rec["name"] = rec["name"]
+                            users[u] = new_rec
+                            save_users_to_file(users)
                             st.success(f"Contraseña temporal para {u}:")
                             st.code(temp_pwd)
+                            st.rerun()
+
+                # Columna para botón de eliminar + confirmación en la misma fila
+                with cols[3]:
+                    if u == st.session_state.user["email"]:
+                        st.caption("No puedes borrar tu propio usuario")
+                    else:
+                        if st.session_state.get("confirm_delete") != u:
+                            if st.button("🗑️ Borrar", key=f"del_{safe}"):
+                                st.session_state["confirm_delete"] = u
+                                st.rerun()
+                        else:
+                            st.warning(
+                                f"¿Seguro que quieres borrar el usuario:\n\n**{u}**?\n\nEsta acción no se puede deshacer."
+                            )
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                if st.button("Sí, borrar", key=f"yes_{safe}"):
+                                    users = load_users_from_file()
+                                    if u in users:
+                                        del users[u]
+                                        save_users_to_file(users)
+                                    st.session_state.pop("confirm_delete", None)
+                                    st.success(f"Usuario {u} eliminado.")
+                                    st.rerun()
+                            with c2:
+                                if st.button("Cancelar", key=f"no_{safe}"):
+                                    st.session_state.pop("confirm_delete", None)
+                                    st.info("Operación cancelada.")
+                                    st.rerun()
         else:
             st.write("No hay usuarios creados.")
-

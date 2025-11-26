@@ -1,0 +1,19 @@
+{
+  "admin@lab.local": {
+    "salt": "JFHBmUDj1olUg/L7J4dxlw==",
+    "hash": "yeWQPz+VNBMssg7VBasKO+EyGMx9tLXRtEPs1RSMwt0=",
+    "role": "admin"
+  },
+  "lab@lab.local": {
+    "salt": "TdELHryESpasht7c9wBgqw==",
+    "hash": "V9VdcXI6AbrlyvLpxagIr7rQTyD633NNwS2WixzyddM=",
+    "role": "lab",
+    "name": "laboratorio"
+  },
+  "recep@lab.local": {
+    "salt": "OGGNAxj59Gii4iKogndMLg==",
+    "hash": "tP0nbNlzvvtDlUt9spg6p8UIJF+Y/iRA8T7/T8gSahA=",
+    "role": "recepcion",
+    "name": "Recepcionista"
+  }
+}

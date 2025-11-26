@@ -9,6 +9,9 @@ import os, json, base64, hashlib, time
 from datetime import datetime, date
 import pandas as pd
 from cryptography.fernet import Fernet
+from pathlib import Path
+
+
 
 # -------------------------
 # Config / archivos
@@ -70,6 +73,56 @@ def verify_password(password: str, salt_b64: str, hash_b64: str) -> bool:
     import base64
     salt = base64.b64decode(salt_b64.encode())
     return pbkdf2_hash(password, salt) == hash_b64
+
+# -------------------------
+# Usuarios persistentes en JSON
+# -------------------------
+
+USERS_FILE = Path(__file__).with_name("usuarios.json")
+
+def load_users_from_file():
+    """
+    Carga el diccionario de usuarios desde usuarios.json.
+    Si no existe o está vacío/dañado, regresa un dict vacío.
+    """
+    if not USERS_FILE.exists():
+        return {}
+    with open(USERS_FILE, "r", encoding="utf-8") as f:
+        data = f.read().strip()
+        if not data:
+            return {}
+        try:
+            return json.loads(data)
+        except Exception:
+            # Si el contenido no es JSON válido, lo tratamos como vacío
+            return {}
+
+def save_users_to_file(users: dict) -> None:
+    """
+    Guarda el diccionario de usuarios en usuarios.json.
+    """
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, indent=2, ensure_ascii=False)
+
+def verify_user_login(username: str, password: str, users: dict | None = None) -> bool:
+    """
+    Verifica usuario+password usando el esquema salt/hash
+    guardado en el JSON.
+    """
+    if users is None:
+        users = load_users_from_file()
+
+    user = users.get(username)
+    if not user:
+        return False
+
+    salt_b64 = user.get("salt")
+    hash_b64 = user.get("hash")
+    if not salt_b64 or not hash_b64:
+        return False
+
+    return verify_password(password, salt_b64, hash_b64)
+
 
 # Usuarios demo en memoria (puedes persistirlos luego)
 USERS = {
