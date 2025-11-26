@@ -1,0 +1,13 @@
+{
+  "lab_info": {
+    "nombre": "LABZA | Laboratorio de Análisis Clínicos",
+    "direccion": "Primavera #400 esq. con Jacaranda Fracc. Villa Florida Cd. Reynosa, Tam.",
+    "telefono": "044 (899) 160-3463",
+    "correo": "labnubiazapata@hotmail.com"
+  },
+  "doctor_info": {
+    "nombre": "Nubia Alejandra Zapata García",
+    "cedula": "4567041",
+    "especialidad": "Q. F. P."
+  }
+}

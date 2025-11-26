@@ -2,13 +2,15 @@
 import streamlit as st
 import pandas as pd
 import os
+import json
 import secrets
 from datetime import datetime, date
 from app_core import (
     USERS, verify_password, make_user,
     lista_estudios, list_folios, get_order_summary,
     save_order, save_results, read_csv, decrypt_view, filter_df, export_excel,
-    load_users_from_file, save_users_to_file, verify_user_login
+    load_users_from_file, save_users_to_file, verify_user_login,
+    generar_pdf_resultado, LAB_INFO, DOCTOR_INFO, save_labza_config, load_labza_config,
 )
 
 # -------------------------
@@ -207,22 +209,123 @@ with tabs[1]:
         
         st.markdown("---")
 
-        resultados = st.text_area("Resultados (texto o JSON)", height=200, placeholder='{"glucosa": 90, "obs":"ayuno 8h"}')
-        c1, c2 = st.columns(2)
+        # -------- Comentarios adicionales (ya no JSON) --------
+        comentarios = st.text_area(
+            "Comentarios adicionales (opcional)",
+            height=100,
+            placeholder="Ej: Paciente en ayuno 8 horas, repetir estudio en 3 meses..."
+        )
+
+        # -------- Captura amigable por estudio --------
+        st.subheader("Resultados por estudio")
+
+        res_formateados = {}
+        folio_actual = st.session_state.get("folio_loaded")
+
+        # Volvemos a obtener la info de la orden para leer los estudios
+        info_orden = {}
+        if folio_actual:
+            info_orden = get_order_summary(folio_actual) or {}
+
+        if folio_actual and info_orden:
+            import re
+            estudios_str = str(info_orden.get("Tipo_Estudio", "")).strip()
+
+            # Evitar que 'nan' se vuelva un estudio
+            if estudios_str and estudios_str.lower() != "nan":
+                estudios = [e.strip() for e in re.split(r"[;,/]", estudios_str) if e.strip()]
+            else:
+                estudios = []
+
+            if estudios:
+                for est in estudios:
+                    col_val, col_uni, col_ref = st.columns([2, 1, 2])
+
+                    etiqueta_valor = f"Valor ({est})" if est else "Valor"
+                    with col_val:
+                        val = st.text_input(etiqueta_valor, key=f"val_{folio_actual}_{est}")
+
+                    with col_uni:
+                        uni = st.text_input("Unidad", key=f"uni_{folio_actual}_{est}")
+
+                    with col_ref:
+                        ref = st.text_input("Referencia", key=f"ref_{folio_actual}_{est}")
+
+                    if val or uni or ref:
+                        res_formateados[est] = {
+                            "valor": val,
+                            "unidad": uni,
+                            "ref": ref,
+                        }
+            else:
+                st.info("Esta orden no tiene estudios listados; puedes usar solo comentarios si lo prefieres.")
+        else:
+            st.info("Selecciona y carga un folio para capturar resultados.")
+
+        # Lo que se guarda en CSV: JSON de los resultados por estudio
+        resultados_json = json.dumps(res_formateados, ensure_ascii=False) if res_formateados else ""
+
+        c1, c2, c3 = st.columns(3)
+
+        # Guardar resultados (capturado)
         with c1:
             if st.button("Guardar resultados"):
                 try:
-                    ok = save_results(st.session_state.get("folio_loaded",""), resultados, liberar=False)
-                    if ok: st.success("Resultados guardados (estado: capturado)")
+                    folio = st.session_state.get("folio_loaded", "")
+                    ok = save_results(folio, resultados_json, liberar=False)
+                    if ok:
+                        st.success("Resultados guardados (estado: capturado)")
                 except Exception as e:
                     st.error(f"Error: {e}")
+
+        # Firmar y liberar
         with c2:
             if st.button("Firmar y liberar"):
                 try:
-                    ok = save_results(st.session_state.get("folio_loaded",""), resultados, liberar=True)
-                    if ok: st.success("Orden firmada (estado: firmado)")
+                    folio = st.session_state.get("folio_loaded", "")
+                    ok = save_results(folio, resultados_json, liberar=True)
+                    if ok:
+                        st.success("Orden firmada (estado: firmado)")
                 except Exception as e:
                     st.error(f"Error: {e}")
+
+        # Generar PDF autollenado
+        with c3:
+            if st.button("Generar PDF autollenado"):
+                folio = st.session_state.get("folio_loaded")
+                if not folio:
+                    st.warning("Primero selecciona y carga un folio.")
+                else:
+                    info = get_order_summary(folio) or {}
+
+                    solicitud = {
+                        "id_solicitud": folio,
+                        "nombre_paciente": info.get("Nombre", info.get("nombre", "")),
+                        "fecha_registro": info.get("Fecha_Registro", info.get("fecha_registro", "")),
+                        "fecha_muestra": info.get("Fecha_Programada", info.get("fecha_muestra", "")),
+                    }
+
+                    # Config más reciente del lab y médico
+                    config = load_labza_config()
+                    lab_info = config["lab_info"]
+                    doctor_info = config["doctor_info"]
+
+                    # Generar el PDF con resultados + comentarios
+                    pdf_bytes = generar_pdf_resultado(
+                        solicitud,
+                        res_formateados,
+                        doctor_info=doctor_info,
+                        lab_info=lab_info,
+                        comentarios=comentarios,
+                    )
+
+                    st.download_button(
+                        label="📥 Descargar PDF de resultados",
+                        data=pdf_bytes,
+                        file_name=f"resultado_{folio}.pdf",
+                        mime="application/pdf",
+                    )
+
 
 # ========== Consultas / Reportes ==========
 with tabs[2]:
@@ -261,20 +364,15 @@ with tabs[3]:
             if not email or not pwd or not role:
                 st.error("Completa usuario/correo, rol y contraseña.")
             else:
-                # Creamos el registro de usuario con contraseña hasheada
                 record = make_user(pwd, role)
                 if name:
-                    record["name"] = name  # opcional: guardamos el nombre descriptivo
+                    record["name"] = name
                 users[email] = record
                 save_users_to_file(users)
                 st.success(f"Usuario {email} creado/actualizado.")
                 st.rerun()
 
-
-               # Tabla: mostrar usuarios y permitir cambiar contraseñas
-        st.markdown("**Usuarios actuales:**")
-
-            # Tabla: mostrar usuarios y permitir cambiar contraseñas
+        # Tabla: mostrar usuarios y permitir cambiar contraseñas
         st.markdown("**Usuarios actuales:**")
 
         if users:
@@ -336,7 +434,7 @@ with tabs[3]:
                             st.code(temp_pwd)
                             st.rerun()
 
-                # Columna para botón de eliminar + confirmación en la misma fila
+                # Columna para botón de eliminar + confirmación
                 with cols[3]:
                     if u == st.session_state.user["email"]:
                         st.caption("No puedes borrar tu propio usuario")
@@ -366,3 +464,40 @@ with tabs[3]:
                                     st.rerun()
         else:
             st.write("No hay usuarios creados.")
+
+        # ------------------------------
+        # Configuración LABZA (lab + médico)
+        # ------------------------------
+        st.markdown("---")
+        st.subheader("Configuración del laboratorio y del médico")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**Datos del laboratorio**")
+            lab_nombre = st.text_input("Nombre del laboratorio", LAB_INFO.get("nombre", ""))
+            lab_dir = st.text_area("Dirección", LAB_INFO.get("direccion", ""), height=70)
+            lab_tel = st.text_input("Teléfono", LAB_INFO.get("telefono", ""))
+            lab_mail = st.text_input("Correo", LAB_INFO.get("correo", ""))
+
+        with col2:
+            st.markdown("**Datos del médico responsable**")
+            doc_nombre = st.text_input("Nombre del médico", DOCTOR_INFO.get("nombre", ""))
+            doc_ced = st.text_input("Cédula profesional", DOCTOR_INFO.get("cedula", ""))
+            doc_esp = st.text_input("Especialidad", DOCTOR_INFO.get("especialidad", ""))
+
+        if st.button("💾 Guardar información"):
+            new_lab = {
+                "nombre": lab_nombre,
+                "direccion": lab_dir,
+                "telefono": lab_tel,
+                "correo": lab_mail,
+            }
+            new_doc = {
+                "nombre": doc_nombre,
+                "cedula": doc_ced,
+                "especialidad": doc_esp,
+            }
+
+            save_labza_config(new_lab, new_doc)
+            st.success("Datos guardados exitosamente.")
